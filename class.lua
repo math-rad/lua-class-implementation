@@ -44,7 +44,7 @@ local function getScript(overideLevel: number?)
 	if not game then
 		return
 	end
-	local path = debug.info(3, "s")
+	local path = debug.info(overideLevel or 3, "s")
 	local pathSegments = string.split(path, '.')
 	
 	local service, index = game:GetService(table.remove(pathSegments, 1)), table.remove(pathSegments, 1)
