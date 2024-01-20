@@ -1,4 +1,11 @@
 --!native
+
+--[[
+Written by @math-rad(github)
+Date: 1/19/2024
+Script: class.luau
+Description: Class implementation for lua with nice syntax
+]]
 local Class = {}
 
 
