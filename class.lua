@@ -8,6 +8,7 @@ Description: Class implementation for lua with nice syntax
 ]]
 local Class = {}
 
+local inspect = require(script["inspect.lua"])
 
 local InternalMembership = {}
 
@@ -22,7 +23,9 @@ local errorTemplates = {
 	["editOrigin"] = [[You may not edit the origin property of a class]],
 	["resetBodyReference"] = [[You may not reset the reference to the class body
 	If you need change a property of the body, set the value directly to the class object(the table which has the "body" property)
-	]]
+	]],
+	["extendedNilClass"] = [[Cannot extend class "%s" from "%s" because "%s" is not a defined class]],
+	["undefinedClass"] = [[Cannot get undefined class "%s"]]
 }
 
 local function markAsInternal(object, context: string) 
@@ -32,11 +35,11 @@ end
 
 local function isInternal(object, doUnmark)
 	local internal = InternalMembership[object] ~= nil
-	
+
 	if internal and (doUnmark ~= nil and doUnmark == true) then
 		InternalMembership[object] = nil
 	end
-	
+
 	return InternalMembership[object] or internal
 end
 
@@ -46,24 +49,24 @@ local function getScript(overideLevel: number?)
 	end
 	local path = debug.info(overideLevel or 3, "s")
 	local pathSegments = string.split(path, '.')
-	
+
 	local service, index = game:GetService(table.remove(pathSegments, 1)), table.remove(pathSegments, 1)
-	
+
 	local instance
-	
+
 	while index do
 		instance = (instance or service)[index]
 		index = table.remove(pathSegments, 1)
 	end
-	
+
 	return instance
 end
 
 function protectClass(class) 
+	local classReferenceString = ([[<class "%s">]]):format(class.name)
 	return setmetatable({}, {
 		["__tostring"] = function()
-			print(class)
-			return ''
+			return classReferenceString
 		end,
 		["__index"] = function(self, index)
 			local value = class[index]
@@ -90,31 +93,34 @@ end
 
 local function makeClass(name) 
 	assert(name, errorTemplates.requireName)
-	
+
 	local class = markAsInternal({
 		["name"] = name,
 		["origin"] = getScript()
 	}, "class")
-	
-	
+
+
 	local protectedClass = protectClass(class)
-	
+
 	localClasses[name] = class 
 	return function(definition)
-		if typeof(definition) == "table"  then
-			class.body = definition
-			class.constructor = definition.constructor
-			return protectedClass
-		elseif isInternal(definition) == "extends" then
+		local internal = isInternal(definition)
+		if internal == "extends" then
 			local extender = definition
 			return function(definition)
 				local classData = extender(definition)
 				class.body = classData.body 
 				class.constructor = classData.body.constructor
 				class.parent = classData.parent
-				class.root = classData.parent.parent or classData.parent
+				class.root = classData.parent and classData.parent.parent or classData.parent
 				return protectedClass
 			end
+		elseif internal == "error" then
+			error(errorTemplates[definition.error]:format(unpack(definition.with(class))), 0)
+		elseif typeof(definition) == "table"  then
+			class.body = definition
+			class.constructor = definition.constructor
+			return protectedClass
 		end
 	end
 end
@@ -123,7 +129,16 @@ end
 function extends(name)
 	local classParent = localClasses[name] or globalClasses[name]
 	
-	return markAsInternal(function(body: classBody) 
+	if not classParent then
+		return markAsInternal({
+			["error"] = "extendedNilClass",
+			["with"] = function(class)
+				return {class.name, name, name}
+			end,
+		}, "error")
+	end
+
+	return markAsInternal(function(body) 
 		local classData = {
 			["parent"] = classParent,
 			["body"] = body
@@ -132,40 +147,39 @@ function extends(name)
 	end, "extends")
 end
 
-function inherit(class, instance)
-	for property, value in class.body do
-		instance[property] = value
-	end
-end
-
 local function new(name)
 	local class = localClasses[name]
 	local instance = {
 		["super"] = class.parent and class.parent.constructor,
-		["class"] = protectClass(class)
+		["class"] = protectClass(class),
 	}
+	
+	if class.parent  then
+		setmetatable(class, {
+			["__index"] = class.parent
+		})
+	end
+	
 	return function(...)
 		local inheritenceTree = {class}
 		local ancestor = class.parent
-		
+
 		while ancestor do
 			table.insert(inheritenceTree, 1, ancestor)
 			ancestor = ancestor.parent
 		end
 		
-		for _, ancestor in inheritenceTree do
-			inherit(ancestor, instance)
-		end
-		
-		class.constructor(instance, ...)
-		
-		return instance
+		return class.constructor(instance, ...) or instance
 	end
 end
 
 
 local function getClass(name) 
-	return  protectClass(localClasses[name] or globalClasses[name])
+	local class = localClasses[name] or globalClasses[name]
+	if not class then
+		error(errorTemplates.undefinedClass:format(name), 0)
+	end
+	return protectClass(class)
 end
 
 
@@ -175,3 +189,4 @@ Class.new = new
 Class.getClass = getClass
 Class.classes = localClasses
 return Class
+
