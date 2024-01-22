@@ -10,7 +10,9 @@ local Class = {}
 
 local inspect = require(script["inspect.lua"])
 
-local InternalMembership = {}
+local InternalMembership = setmetatable({}, {
+	["__mode"] = 'k'
+})
 
 local globalClasses = {}
 local localClasses = {}
@@ -33,14 +35,8 @@ local function markAsInternal(object, context: string)
 	return object
 end
 
-local function isInternal(object, doUnmark)
-	local internal = InternalMembership[object] ~= nil
-
-	if internal and (doUnmark ~= nil and doUnmark == true) then
-		InternalMembership[object] = nil
-	end
-
-	return InternalMembership[object] or internal
+local function isInternal(object)
+	return InternalMembership[object]
 end
 
 local function getScript(overideLevel: number?) 
@@ -66,11 +62,11 @@ function protectClass(class)
 	local classReferenceString = ([[<class "%s">]]):format(class.name)
 	return setmetatable({}, {
 		["__tostring"] = function()
-			return classReferenceString
+			return inspect.inspect(class)
 		end,
 		["__index"] = function(self, index)
 			local value = class[index]
-			local internal = isInternal(value, false)
+			local internal = isInternal(value)
 			if internal == "class" then
 				return protectClass(value) -- ensures descendant class protection
 			end
@@ -98,6 +94,7 @@ local function makeClass(name)
 		["name"] = name,
 		["origin"] = getScript()
 	}, "class")
+	
 
 
 	local protectedClass = protectClass(class)
@@ -113,6 +110,15 @@ local function makeClass(name)
 				class.constructor = classData.body.constructor
 				class.parent = classData.parent
 				class.root = classData.parent and classData.parent.parent or classData.parent
+				
+				setmetatable(class.body, {
+					["__index"] = class.parent
+				})
+				
+				class.instanceMeta = {
+					["__index"] = class.body
+				}
+				
 				return protectedClass
 			end
 		elseif internal == "error" then
@@ -120,6 +126,11 @@ local function makeClass(name)
 		elseif typeof(definition) == "table"  then
 			class.body = definition
 			class.constructor = definition.constructor
+			
+			class.instanceMeta = {
+				["__index"] = class.body
+			}
+			
 			return protectedClass
 		end
 	end
@@ -149,16 +160,10 @@ end
 
 local function new(name)
 	local class = localClasses[name]
-	local instance = {
+	local instance = markAsInternal(setmetatable({
 		["super"] = class.parent and class.parent.constructor,
 		["class"] = protectClass(class),
-	}
-	
-	if class.parent  then
-		setmetatable(class, {
-			["__index"] = class.parent
-		})
-	end
+	}, class.instanceMeta), "instance")
 	
 	return function(...)
 		local inheritenceTree = {class}
